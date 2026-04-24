@@ -39,3 +39,6 @@ data/
 
 # macOS
 .DS_Store
+
+# Private Kaggle deploy dir (contains embedded secrets)
+kaggle_deploy/
