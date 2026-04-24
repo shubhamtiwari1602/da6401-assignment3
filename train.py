@@ -448,7 +448,7 @@ def run_training_experiment(args=None) -> None:
         warmup_steps=args.warmup_steps, epochs=args.epochs,
     )
 
-    wandb.init(project="da6401-a3", config=vars(args), reinit=True)
+    wandb.init(project="da6401-a3", config=vars(args), reinit="finish_previous")
 
     # ═══════════════════════════════════════════════════════
     # Exp 2.1 — Noam Scheduler vs Fixed LR
