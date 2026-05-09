@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import importlib
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -405,7 +406,25 @@ class Transformer(nn.Module):
 
     # ── SUBMISSION INFERENCE HELPERS ─────────────────────────────────
 
+    def _ensure_package(self, import_name: str, package_name: Optional[str] = None) -> None:
+        try:
+            importlib.import_module(import_name)
+            return
+        except ImportError:
+            pass
+
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", package_name or import_name],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        importlib.import_module(import_name)
+
     def _load_inference_assets(self) -> Tuple[int, int]:
+        self._ensure_package("datasets")
+        self._ensure_package("spacy")
+
         from datasets import load_dataset
         from dataset import Vocabulary
         import spacy
@@ -447,6 +466,11 @@ class Transformer(nn.Module):
 
         self.src_vocab.build(src_tokens)
         self.tgt_vocab.build(tgt_tokens)
+        if len(self.src_vocab) != 7853 or len(self.tgt_vocab) != 5893:
+            raise RuntimeError(
+                f"Inference vocab mismatch: got src={len(self.src_vocab)}, tgt={len(self.tgt_vocab)}; "
+                "expected src=7853, tgt=5893 from the trained checkpoint."
+            )
         return len(self.src_vocab), len(self.tgt_vocab)
 
     def _load_submission_config(self) -> dict:
@@ -498,16 +522,8 @@ class Transformer(nn.Module):
         file_id: Optional[str] = None,
         file_url: Optional[str] = None,
     ) -> None:
-        try:
-            import gdown
-        except ImportError:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "gdown"],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            import gdown
+        self._ensure_package("gdown")
+        import gdown
 
         if file_id:
             gdown.download(id=file_id, output=str(destination), quiet=True)
