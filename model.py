@@ -16,6 +16,12 @@ AUTOGRADER CONTRACT (DO NOT MODIFY SIGNATURES):
 
 import math
 import copy
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional, Tuple
 
 import torch
@@ -306,17 +312,25 @@ class Transformer(nn.Module):
 
     def __init__(
         self,
-        src_vocab_size: int,
-        tgt_vocab_size: int,
-        d_model:   int   = 512,
-        N:         int   = 6,
+        src_vocab_size: Optional[int] = None,
+        tgt_vocab_size: Optional[int] = None,
+        d_model:   int   = 256,
+        N:         int   = 3,
         num_heads: int   = 8,
-        d_ff:      int   = 2048,
+        d_ff:      int   = 512,
         dropout:   float = 0.1,
         learned_pos_enc: bool = False,
         max_len:   int   = 5000,
     ) -> None:
         super().__init__()
+
+        self.d_model = d_model
+        self.max_len = max_len
+        self.learned_pos_enc = learned_pos_enc
+        self._inference_ready = src_vocab_size is None or tgt_vocab_size is None
+
+        if self._inference_ready:
+            src_vocab_size, tgt_vocab_size = self._load_inference_assets()
 
         enc_layer = EncoderLayer(d_model, num_heads, d_ff, dropout)
         dec_layer = DecoderLayer(d_model, num_heads, d_ff, dropout)
@@ -331,15 +345,15 @@ class Transformer(nn.Module):
             self.src_pos = nn.Embedding(max_len, d_model)
             self.tgt_pos = nn.Embedding(max_len, d_model)
             self.pos_dropout = nn.Dropout(p=dropout)
-            self.learned_pos_enc = True
         else:
             self.pos_enc = PositionalEncoding(d_model, dropout, max_len)
-            self.learned_pos_enc = False
 
         self.fc_out = nn.Linear(d_model, tgt_vocab_size)
-        self.d_model = d_model
 
         self._init_weights()
+
+        if self._inference_ready:
+            self._load_inference_weights()
 
     def _init_weights(self):
         for p in self.parameters():
@@ -388,3 +402,165 @@ class Transformer(nn.Module):
     ) -> torch.Tensor:
         memory = self.encode(src, src_mask)
         return self.decode(memory, src_mask, tgt, tgt_mask)
+
+    # ── SUBMISSION INFERENCE HELPERS ─────────────────────────────────
+
+    def _load_inference_assets(self) -> Tuple[int, int]:
+        from datasets import load_dataset
+        from dataset import Vocabulary
+        import spacy
+
+        self.src_vocab = Vocabulary()
+        self.tgt_vocab = Vocabulary()
+
+        try:
+            self.nlp_de = spacy.load("de_core_news_sm")
+        except OSError:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "spacy", "download", "de_core_news_sm"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.nlp_de = spacy.load("de_core_news_sm")
+            except Exception:
+                self.nlp_de = spacy.blank("de")
+
+        try:
+            self.nlp_en = spacy.load("en_core_web_sm")
+        except OSError:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.nlp_en = spacy.load("en_core_web_sm")
+            except Exception:
+                self.nlp_en = spacy.blank("en")
+
+        train_split = load_dataset("bentrevett/multi30k", split="train")
+        src_tokens = [[tok.text.lower() for tok in self.nlp_de.tokenizer(ex["de"])] for ex in train_split]
+        tgt_tokens = [[tok.text.lower() for tok in self.nlp_en.tokenizer(ex["en"])] for ex in train_split]
+
+        self.src_vocab.build(src_tokens)
+        self.tgt_vocab.build(tgt_tokens)
+        return len(self.src_vocab), len(self.tgt_vocab)
+
+    def _load_submission_config(self) -> dict:
+        cfg_path = Path(__file__).with_name("submission_config.json")
+        if not cfg_path.exists():
+            return {}
+        with cfg_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _resolve_checkpoint_path(self) -> Path:
+        cfg = self._load_submission_config()
+
+        local_candidates = [
+            cfg.get("local_checkpoint"),
+            os.environ.get("DA6401_A3_LOCAL_CHECKPOINT"),
+            "kaggle_deploy/output/sin_pe.pt",
+            "checkpoints/sin_pe.pt",
+            "sin_pe.pt",
+        ]
+        for candidate in local_candidates:
+            if not candidate:
+                continue
+            path = Path(candidate)
+            if not path.is_absolute():
+                path = Path(__file__).resolve().parent / path
+            if path.exists():
+                return path
+
+        file_id = cfg.get("gdrive_file_id") or os.environ.get("DA6401_A3_GDRIVE_FILE_ID")
+        file_url = cfg.get("gdrive_url") or os.environ.get("DA6401_A3_GDRIVE_URL")
+        if not file_id and not file_url:
+            raise FileNotFoundError(
+                "No checkpoint found. Add a local checkpoint path or set a Google Drive file id/url "
+                "in submission_config.json or the DA6401_A3_GDRIVE_FILE_ID/DA6401_A3_GDRIVE_URL env vars."
+            )
+
+        download_dir = Path(__file__).resolve().parent / ".cache"
+        download_dir.mkdir(exist_ok=True)
+        destination = download_dir / "submission_checkpoint.pt"
+        if destination.exists():
+            return destination
+
+        self._download_checkpoint(destination, file_id=file_id, file_url=file_url)
+        return destination
+
+    def _download_checkpoint(
+        self,
+        destination: Path,
+        file_id: Optional[str] = None,
+        file_url: Optional[str] = None,
+    ) -> None:
+        try:
+            import gdown
+        except ImportError:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "gdown"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            import gdown
+
+        if file_id:
+            gdown.download(id=file_id, output=str(destination), quiet=True)
+        else:
+            gdown.download(url=file_url, output=str(destination), quiet=True)
+
+        if not destination.exists():
+            raise FileNotFoundError(f"Checkpoint download failed: {destination}")
+
+    def _load_inference_weights(self) -> None:
+        ckpt_path = self._resolve_checkpoint_path()
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        self.load_state_dict(state_dict, strict=True)
+
+    def _detokenize_english(self, tokens) -> str:
+        text = " ".join(tokens)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"\(\s+", "(", text)
+        text = re.sub(r"\s+\)", ")", text)
+        text = re.sub(r"\s+'", "'", text)
+        return text.strip()
+
+    def infer(self, german_sentence: str) -> str:
+        if not self._inference_ready:
+            raise RuntimeError("infer() is only available on a submission/inference-initialized Transformer().")
+
+        from dataset import Vocabulary
+
+        self.eval()
+        device = next(self.parameters()).device
+
+        src_tokens = [tok.text.lower() for tok in self.nlp_de.tokenizer(german_sentence)]
+        src_ids = [Vocabulary.SOS_IDX] + self.src_vocab.lookup_indices(src_tokens) + [Vocabulary.EOS_IDX]
+        src = torch.tensor([src_ids], dtype=torch.long, device=device)
+        src_mask = make_src_mask(src, Vocabulary.PAD_IDX).to(device)
+
+        with torch.no_grad():
+            memory = self.encode(src, src_mask)
+            ys = torch.tensor([[Vocabulary.SOS_IDX]], dtype=torch.long, device=device)
+
+            for _ in range(self.max_len - 1):
+                tgt_mask = make_tgt_mask(ys, Vocabulary.PAD_IDX).to(device)
+                logits = self.decode(memory, src_mask, ys, tgt_mask)
+                next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+                ys = torch.cat([ys, next_token], dim=1)
+                if next_token.item() == Vocabulary.EOS_IDX:
+                    break
+
+        pred_ids = ys[0].tolist()
+        pred_tokens = [
+            self.tgt_vocab.lookup_token(idx)
+            for idx in pred_ids
+            if idx not in (Vocabulary.SOS_IDX, Vocabulary.EOS_IDX, Vocabulary.PAD_IDX)
+        ]
+        return self._detokenize_english(pred_tokens)

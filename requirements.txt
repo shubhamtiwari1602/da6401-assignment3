@@ -8,3 +8,4 @@ spacy
 tqdm
 evaluate
 sacrebleu
+gdown

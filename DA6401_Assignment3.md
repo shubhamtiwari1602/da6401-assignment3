@@ -4,6 +4,26 @@
 
 ---
 
+## Announcement Regarding Assignment 3 Submission
+
+- Slight modification in the `Transformer` class in `model.py`: add another method named `infer()`. This method should execute the complete end-to-end NLP pipeline for our task, i.e. accept a German sentence, tokenize it, feed the tokens through the Transformer forward pass, perform autoregressive decoding and detokenization, and finally return the corresponding English sentence. This change is also reflected in the official GitHub repository.
+- For evaluating BLEU score on the final hidden set, the autograder will run the following for every test sample:
+
+```python
+model = Transformer().to(self.device)
+model.eval()
+english_sentence = model.infer(german_sentence)  # single sentence
+```
+
+- Ensure your code and saved model work correctly with this exact usage pattern before submission.
+- All constructor/function arguments should have their intended default values.
+- Students should load all vocabulary objects, tokenizers, and related inference assets inside `Transformer.__init__()` only.
+- The saved model weights should also be loaded inside `Transformer.__init__()` only. Do not upload trained weights directly to Gradescope. Use `gdown` (similar to Assignment 2) to download the weights from your Drive and load them into your model architecture, all from inside `Transformer.__init__()`.
+- The Assignment 3 forum is open on Moodle for doubt clarification.
+- The Gradescope submission link will open on **09/05/2026**.
+
+---
+
 ### General Instructions & Academic Integrity
 
 - This is an individual assignment. Collaborations or discussions with other students are strictly prohibited.
@@ -90,7 +110,7 @@ To achieve convergence on the Multi30k dataset, you must implement specific opti
 
 $$lrate = d_{model}^{-0.5} \cdot \min(\text{step\_num}^{-0.5},\ \text{step\_num} \cdot \text{warmup\_steps}^{-1.5})$$
 
-- **Greedy Decoding:** Write an inference function that generates translations token-by-token using the trained model.
+- **Greedy Decoding / Inference API:** Implement `Transformer.infer(german_sentence)` so it performs the complete single-sentence inference pipeline: German sentence input, tokenization, autoregressive decoding, detokenization, and English sentence output.
 
 ---
 
@@ -102,6 +122,7 @@ The submission will be evaluated based on the following weighted criteria:
 - **Positional Encoding [10M]:** Your `PositionalEncoding` will be tested across five criteria: output shape preservation, even-indexed dimensions equalling $\sin(0) = 0$ at position 0, odd-indexed dimensions equalling $\cos(0) = 1$ at position 0, formula correctness at an arbitrary `(pos, dim)` pair, and the encoding being registered as a buffer rather than a trainable parameter.
 - **Noam LR Scheduler [10M]:** Your `NoamScheduler` will be tested across five criteria: learning rate being monotonically increasing during warm-up, the peak occurring within 10 steps of `warmup_steps`, learning rate being monotonically decreasing after warm-up, the peak value matching the closed-form formula, and the learning rate at step 1 matching the formula.
 - **Test-Set Performance [20M]:** Your best saved checkpoint will be loaded and evaluated on a held-out test set using corpus-level BLEU score via `evaluate.bleu`.
+- **Autograder Compatibility:** The evaluator will instantiate your model using default arguments only, and will expect all tokenizers, vocabularies, auxiliary assets, and model weights to be initialized within `Transformer.__init__()`. Your trained weights must be fetched programmatically using `gdown` instead of being uploaded directly to Gradescope.
 
 ---
 

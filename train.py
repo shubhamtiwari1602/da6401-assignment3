@@ -234,6 +234,7 @@ def save_checkpoint(
             "num_heads": model.encoder.layers[0].self_attn.num_heads,
             "d_ff":      model.encoder.layers[0].ffn.linear1.out_features,
             "dropout":   model.encoder.layers[0].dropout.p,
+            "learned_pos_enc": model.learned_pos_enc,
         },
     }, path)
 
